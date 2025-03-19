@@ -9,218 +9,7 @@
 #import <objc/runtime.h>
 #import "CityManager.h"
 #import "AwemeHeaders.h"
-
-static UIWindow * getActiveWindow(void) {
-    if (@available(iOS 15.0, *)) {
-        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-            if ([scene isKindOfClass:[UIWindowScene class]] && scene.activationState == UISceneActivationStateForegroundActive) {
-                for (UIWindow *w in ((UIWindowScene *)scene).windows) {
-                    if (w.isKeyWindow) return w;
-                }
-            }
-        }
-        return nil;
-    } else {
-        #pragma clang diagnostic push
-        #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-        return [UIApplication sharedApplication].windows.firstObject;
-        #pragma clang diagnostic pop
-    }
-}
-
-static UIViewController * getActiveTopController(void) {
-    UIWindow *window = getActiveWindow();
-    if (!window) return nil;
-    
-    UIViewController *topController = window.rootViewController;
-    while (topController.presentedViewController) {
-        topController = topController.presentedViewController;
-    }
-    
-    return topController;
-}
-
-static UIColor * colorWithHexString(NSString *hexString) {
-    if ([[hexString lowercaseString] isEqualToString:@"random"] || 
-        [[hexString lowercaseString] isEqualToString:@"#random"]) {
-        CGFloat red = arc4random_uniform(200) / 255.0;
-        CGFloat green = arc4random_uniform(200) / 255.0;
-        CGFloat blue = arc4random_uniform(128) / 255.0;
-        CGFloat alpha = 1;
-        return [UIColor colorWithRed:red green:green blue:blue alpha:alpha];
-    }
-    
-    NSString *colorString = hexString;
-    if ([hexString hasPrefix:@"#"]) {
-        colorString = [hexString substringFromIndex:1];
-    }
-    
-    if (colorString.length == 3) {
-        NSString *r = [colorString substringWithRange:NSMakeRange(0, 1)];
-        NSString *g = [colorString substringWithRange:NSMakeRange(1, 1)];
-        NSString *b = [colorString substringWithRange:NSMakeRange(2, 1)];
-        colorString = [NSString stringWithFormat:@"%@%@%@%@%@%@", r, r, g, g, b, b];
-    }
-    
-    if (colorString.length == 6) {
-        unsigned int hexValue = 0;
-        NSScanner *scanner = [NSScanner scannerWithString:colorString];
-        [scanner scanHexInt:&hexValue];
-        
-        CGFloat red = ((hexValue & 0xFF0000) >> 16) / 255.0;
-        CGFloat green = ((hexValue & 0x00FF00) >> 8) / 255.0;
-        CGFloat blue = (hexValue & 0x0000FF) / 255.0;
-        
-        return [UIColor colorWithRed:red green:green blue:blue alpha:1.0];
-    }
-    
-    if (colorString.length == 8) {
-        unsigned int hexValue = 0;
-        NSScanner *scanner = [NSScanner scannerWithString:colorString];
-        [scanner scanHexInt:&hexValue];
-        
-        CGFloat red = ((hexValue & 0xFF000000) >> 24) / 255.0;
-        CGFloat green = ((hexValue & 0x00FF0000) >> 16) / 255.0;
-        CGFloat blue = ((hexValue & 0x0000FF00) >> 8) / 255.0;
-        CGFloat alpha = (hexValue & 0x000000FF) / 255.0;
-        
-        return [UIColor colorWithRed:red green:green blue:blue alpha:alpha];
-    }
-    
-    return [UIColor whiteColor];
-}
-
-void showToast(NSString *text) {
-    [%c(DUXToast) showText:text];
-}
-
-void saveMedia(NSURL *mediaURL, MediaType mediaType, void (^completion)(void)) {
-    if (mediaType == MediaTypeAudio) {
-        return;
-    }
-
-    [PHPhotoLibrary requestAuthorization:^(PHAuthorizationStatus status) {
-        if (status == PHAuthorizationStatusAuthorized) {
-            [[PHPhotoLibrary sharedPhotoLibrary] performChanges:^{
-                if (mediaType == MediaTypeVideo) {
-                    [PHAssetChangeRequest creationRequestForAssetFromVideoAtFileURL:mediaURL];
-                } else if (mediaType == MediaTypeHeic) {
-                    [PHAssetChangeRequest creationRequestForAssetFromImageAtFileURL:mediaURL];
-                } else {
-                    UIImage *image = [UIImage imageWithContentsOfFile:mediaURL.path];
-                    if (image) {
-                        [PHAssetChangeRequest creationRequestForAssetFromImage:image];
-                    }
-                }
-            } completionHandler:^(BOOL success, NSError * _Nullable error) {
-                if (success) {
-                    if (completion) {
-                        completion();
-                    }
-                } else {
-                    showToast(@"保存失败");
-                }
-                [[NSFileManager defaultManager] removeItemAtPath:mediaURL.path error:nil];
-            }];
-        }
-    }];
-}
-
-void downloadMedia(NSURL *url, MediaType mediaType, void (^completion)(void)) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        Class AWEProgressLoadingViewClass = %c(AWEProgressLoadingView);
-        id loadingView = nil;
-        
-        if ([AWEProgressLoadingViewClass respondsToSelector:@selector(alloc)]) {
-            id allocatedView = [AWEProgressLoadingViewClass alloc];
-            if ([allocatedView respondsToSelector:@selector(init)]) {
-                loadingView = [allocatedView init];
-                if ([loadingView respondsToSelector:@selector(setTitle:)]) {
-                    [loadingView performSelector:@selector(setTitle:) withObject:@"解析中..."];
-                }
-            }
-        }
-        
-        if (loadingView && [loadingView respondsToSelector:@selector(showInView:animated:)]) {
-            [loadingView performSelector:@selector(showInView:animated:) withObject:[UIApplication sharedApplication].keyWindow withObject:@(YES)];
-        } else if (loadingView && [loadingView respondsToSelector:@selector(showOnView:animated:)]) {
-            [loadingView showOnView:[UIApplication sharedApplication].keyWindow animated:YES];
-        }
-
-        NSURLSession *session = [NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration defaultSessionConfiguration] delegate:nil delegateQueue:[NSOperationQueue mainQueue]];
-        NSURLSessionDownloadTask *downloadTask = [session downloadTaskWithURL:url completionHandler:^(NSURL *location, NSURLResponse *response, NSError *error) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                if (loadingView) {
-                    if ([loadingView respondsToSelector:@selector(dismissAnimated:)]) {
-                        [loadingView dismissAnimated:YES];
-                    } else if ([loadingView respondsToSelector:@selector(dismiss)]) {
-                        [loadingView performSelector:@selector(dismiss)];
-                    }
-                }
-            });
-
-            if (!error) {
-                NSString *fileName = url.lastPathComponent;
-
-                if (!fileName.pathExtension.length) {
-                    switch (mediaType) {
-                        case MediaTypeVideo:
-                            fileName = [fileName stringByAppendingPathExtension:@"mp4"];
-                            break;
-                        case MediaTypeImage:
-                            fileName = [fileName stringByAppendingPathExtension:@"jpg"];
-                            break;
-                        case MediaTypeAudio:
-                            fileName = [fileName stringByAppendingPathExtension:@"mp3"];
-                            break;
-                        case MediaTypeHeic:
-                            fileName = [fileName stringByAppendingPathExtension:@"heic"];
-                            break;
-                    }
-                }
-
-                NSURL *tempDir = [NSURL fileURLWithPath:NSTemporaryDirectory()];
-                NSURL *destinationURL = [tempDir URLByAppendingPathComponent:fileName];
-                [[NSFileManager defaultManager] moveItemAtURL:location toURL:destinationURL error:nil];
-
-                if (mediaType == MediaTypeAudio) {
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        UIActivityViewController *activityVC = [[UIActivityViewController alloc] initWithActivityItems:@[destinationURL] applicationActivities:nil];
-
-                        [activityVC setCompletionWithItemsHandler:^(UIActivityType _Nullable activityType, BOOL completed, NSArray * _Nullable returnedItems, NSError * _Nullable error) {
-                            [[NSFileManager defaultManager] removeItemAtURL:destinationURL error:nil];
-                        }];
-                        UIViewController *rootVC = [UIApplication sharedApplication].keyWindow.rootViewController;
-                        [rootVC presentViewController:activityVC animated:YES completion:nil];
-                    });
-                } else {
-                    saveMedia(destinationURL, mediaType, completion);
-                }
-            } else {
-                showToast(@"下载失败");
-            }
-        }];
-        [downloadTask resume];
-    });
-}
-
-void downloadAllImages(NSMutableArray *imageURLs) {
-    dispatch_group_t group = dispatch_group_create();
-    __block NSInteger downloadCount = 0;
-
-    for (NSString *imageURL in imageURLs) {
-        NSURL *url = [NSURL URLWithString:imageURL];
-        dispatch_group_enter(group);
-
-        downloadMedia(url, MediaTypeImage, ^{
-            dispatch_group_leave(group);
-        });
-    }
-
-    dispatch_group_notify(group, dispatch_get_main_queue(), ^{
-        showToast(@"所有图片保存完成");
-    });
-}
+#import "DYYYManager.h"
 
 %hook AWEAwemePlayVideoViewController
 
@@ -263,7 +52,7 @@ void downloadAllImages(NSMutableArray *imageURLs) {
         }
         
         void (^tryFindAndSetPureMode)(void) = ^{
-            UIWindow *keyWindow = getActiveWindow();
+            UIWindow *keyWindow = [DYYYManager getActiveWindow];
             
             if (keyWindow && keyWindow.rootViewController) {
                 UIViewController *feedVC = [self findViewController:keyWindow.rootViewController ofClass:NSClassFromString(@"AWEFeedTableViewController")];
@@ -329,11 +118,11 @@ void downloadAllImages(NSMutableArray *imageURLs) {
         NSString *danmuColor = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYdanmuColor"];
         
         if ([danmuColor.lowercaseString isEqualToString:@"random"] || [danmuColor.lowercaseString isEqualToString:@"#random"]) {
-            textColor = colorWithHexString(@"random");
+            textColor = [DYYYManager colorWithHexString:@"random"];
             self.layer.shadowOffset = CGSizeZero;
             self.layer.shadowOpacity = 0.0;
         } else if ([danmuColor hasPrefix:@"#"]) {
-            textColor = colorWithHexString(danmuColor);
+            textColor = [DYYYManager colorWithHexString:danmuColor];
             self.layer.shadowOffset = CGSizeZero;
             self.layer.shadowOpacity = 0.0;
         }
@@ -349,9 +138,9 @@ void downloadAllImages(NSMutableArray *imageURLs) {
         NSString *danmuColor = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYdanmuColor"];
         
         if ([danmuColor.lowercaseString isEqualToString:@"random"] || [danmuColor.lowercaseString isEqualToString:@"#random"]) {
-            arg1 = colorWithHexString(@"random");
+            arg1 = [DYYYManager colorWithHexString:@"random"];
         } else if ([danmuColor hasPrefix:@"#"]) {
-            arg1 = colorWithHexString(danmuColor);
+            arg1 = [DYYYManager colorWithHexString:danmuColor];
         }
     }
 
@@ -450,7 +239,7 @@ void downloadAllImages(NSMutableArray *imageURLs) {
         AWESettingItemModel *dyyyItem = [[%c(AWESettingItemModel) alloc] init];
         dyyyItem.identifier = @"DYYY";
         dyyyItem.title = @"DYYY";
-        dyyyItem.detail = @"v2.1-5";
+        dyyyItem.detail = @"v2.1-6";
         dyyyItem.type = 0;
         dyyyItem.iconImageName = @"noticesettting_like";
         dyyyItem.cellType = 26;
@@ -624,6 +413,11 @@ void downloadAllImages(NSMutableArray *imageURLs) {
 %hook UIView
 
 - (void)setFrame:(CGRect)frame {
+
+    if ([self isKindOfClass:%c(AWEIMSkylightListView)] && [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYisHiddenAvatarList"]) {
+        frame = CGRectZero;
+    }
+
     if (![[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYisEnableCommentBlur"] && ![[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYisEnableFullScreen"]) {
         %orig;
         return;
@@ -805,8 +599,21 @@ void downloadAllImages(NSMutableArray *imageURLs) {
 
 %hook AWEAwemeModel
 
+- (id)initWithDictionary:(id)arg1 error:(id *)arg2 {
+    id orig = %orig;
+    BOOL noAds = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYNoAds"];
+    return (noAds && self.isAds) ? nil : orig;
+}
+
+- (id)init {
+    id orig = %orig;
+    BOOL noAds = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYNoAds"];
+    return (noAds && self.isAds) ? nil : orig;
+}
+
 - (void)setIsAds:(BOOL)isAds {
-    %orig(NO);
+    BOOL noAds = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYNoAds"];
+    %orig(noAds ? isAds : NO); 
 }
 
 %end
@@ -829,13 +636,19 @@ void downloadAllImages(NSMutableArray *imageURLs) {
 %hook AWELeftSideBarEntranceView
 
 - (void)layoutSubviews {
-    %orig;
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYisHiddenSidebarDot"]) {
-        for (UIView *subview in [self subviews]) {
-            if ([subview isKindOfClass:NSClassFromString(@"DUXBadge")]) {
-                subview.hidden = YES;
-            }
+    
+    __block BOOL isInTargetController = NO;
+    UIResponder *currentResponder = self;
+    
+    while ((currentResponder = [currentResponder nextResponder])) {
+        if ([currentResponder isKindOfClass:NSClassFromString(@"AWEUserHomeViewControllerV2")]) {
+            isInTargetController = YES;
+            break;
         }
+    }
+    
+    if (!isInTargetController&&[[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYisHiddenLeftSideBar"]) {
+        self.alpha = 0;
     }
 }
 
@@ -1178,7 +991,7 @@ void downloadAllImages(NSMutableArray *imageURLs) {
             [alertController addAction:cancelAction];
             [alertController addAction:confirmAction];
             
-            UIViewController *topController = getActiveTopController();
+            UIViewController *topController = [DYYYManager getActiveTopController];
             if (topController) {
                 [topController presentViewController:alertController animated:YES completion:nil];
             }
@@ -1218,7 +1031,7 @@ void downloadAllImages(NSMutableArray *imageURLs) {
             [alertController addAction:cancelAction];
             [alertController addAction:confirmAction];
 
-            UIViewController *topController = getActiveTopController();
+            UIViewController *topController = [DYYYManager getActiveTopController];
             if (topController) {
                 [topController presentViewController:alertController animated:YES completion:nil];
             }
@@ -1257,31 +1070,31 @@ void downloadAllImages(NSMutableArray *imageURLs) {
         //左时间的视图不存在就创建 50 15 大小的视图文本
         if (!self.leftLabelUI) {
             self.leftLabelUI = [[UILabel alloc] init];
-            self.leftLabelUI.frame = CGRectMake(3, -12, 50, 15);
+            self.leftLabelUI.frame = CGRectMake(0, -12, 50, 15);
             self.leftLabelUI.backgroundColor = [UIColor clearColor];
             [(UILabel *)self.leftLabelUI setText:@"00:00"];
             [(UILabel *)self.leftLabelUI setTextColor:[UIColor whiteColor]];
-            [(UILabel *)self.leftLabelUI setFont:[UIFont systemFontOfSize:10]];
+            [(UILabel *)self.leftLabelUI setFont:[UIFont systemFontOfSize:8]];
             [self addSubview:self.leftLabelUI];
         }else{
             [(UILabel *)self.leftLabelUI setText:@"00:00"];
             [(UILabel *)self.leftLabelUI setTextColor:[UIColor whiteColor]];
-            [(UILabel *)self.leftLabelUI setFont:[UIFont systemFontOfSize:10]];
+            [(UILabel *)self.leftLabelUI setFont:[UIFont systemFontOfSize:8]];
         }
         
         // 如果rightLabelUI为空,创建右侧视图
         if (!self.rightLabelUI) {
             self.rightLabelUI = [[UILabel alloc] init];
-            self.rightLabelUI.frame = CGRectMake(self.frame.size.width - 30, -12, 50, 15);
+            self.rightLabelUI.frame = CGRectMake(self.frame.size.width - 25, -12, 50, 15);
             self.rightLabelUI.backgroundColor = [UIColor clearColor];
             [(UILabel *)self.rightLabelUI setText:duration];
             [(UILabel *)self.rightLabelUI setTextColor:[UIColor whiteColor]];
-            [(UILabel *)self.rightLabelUI setFont:[UIFont systemFontOfSize:10]];
+            [(UILabel *)self.rightLabelUI setFont:[UIFont systemFontOfSize:8]];
             [self addSubview:self.rightLabelUI];
         }else{
             [(UILabel *)self.rightLabelUI setText:duration];
             [(UILabel *)self.rightLabelUI setTextColor:[UIColor whiteColor]];
-            [(UILabel *)self.rightLabelUI setFont:[UIFont systemFontOfSize:10]];
+            [(UILabel *)self.rightLabelUI setFont:[UIFont systemFontOfSize:8]];
         }
     }
 }
@@ -1335,7 +1148,6 @@ void downloadAllImages(NSMutableArray *imageURLs) {
 }
 %end
 
-
 %hook AWENormalModeTabBarTextView
 
 - (void)layoutSubviews {
@@ -1379,35 +1191,65 @@ void downloadAllImages(NSMutableArray *imageURLs) {
 %end
 
 %hook AWEFeedIPhoneAutoPlayManager
-
-- (BOOL)isAutoPlayOpen {
-    BOOL r = %orig;
-    
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYisEnableAutoPlay"]) {
-        return YES;
-    }
-    return r;
-}
-
+ 
+ - (BOOL)isAutoPlayOpen {
+     BOOL r = %orig;
+     
+     if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYisEnableAutoPlay"]) {
+         return YES;
+     }
+     return r;
+ }
+ 
 %end
 
-%hook AWEHPTopTabItemModel
+%hook AWEFeedChannelManager
 
-- (void)setChannelID:(NSString *)channelID {
+- (void)reloadChannelWithChannelModels:(id)arg1 currentChannelIDList:(id)arg2 reloadType:(id)arg3 selectedChannelID:(id)arg4 {
+    NSArray *channelModels = arg1;
+    NSMutableArray *newChannelModels = [NSMutableArray array];
+    NSArray *currentChannelIDList = arg2;
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-
-    if (([channelID isEqualToString:@"homepage_hot_container"] && [defaults boolForKey:@"DYYYHideHotContainer"]) ||
-        ([channelID isEqualToString:@"homepage_follow"] && [defaults boolForKey:@"DYYYHideFollow"]) ||
-        ([channelID isEqualToString:@"homepage_mediumvideo"] && [defaults boolForKey:@"DYYYHideMediumVideo"]) ||
-        ([channelID isEqualToString:@"homepage_mall"] && [defaults boolForKey:@"DYYYHideMall"]) ||
-        ([channelID isEqualToString:@"homepage_nearby"] && [defaults boolForKey:@"DYYYHideNearby"]) ||
-        ([channelID isEqualToString:@"homepage_groupon"] && [defaults boolForKey:@"DYYYHideGroupon"]) ||
-        ([channelID isEqualToString:@"homepage_tablive"] && [defaults boolForKey:@"DYYYHideTabLive"]) ||
-        ([channelID isEqualToString:@"homepage_pad_hot"] && [defaults boolForKey:@"DYYYHidePadHot"]) ||
-        ([channelID isEqualToString:@"homepage_hangout"] && [defaults boolForKey:@"DYYYHideHangout"])) {
-        return;
+    
+    NSMutableArray *newCurrentChannelIDList = [NSMutableArray arrayWithArray:currentChannelIDList];
+    
+    for (AWEHPTopTabItemModel *tabItemModel in channelModels) {
+        NSString *channelID = tabItemModel.channelID;
+        
+        if ([channelID isEqualToString:@"homepage_hot_container"]) {
+            [newChannelModels addObject:tabItemModel];
+            continue;
+        }
+        
+        BOOL isHideChannel = NO;
+        if ([channelID isEqualToString:@"homepage_follow"]) {
+            isHideChannel = [defaults boolForKey:@"DYYYHideFollow"];
+        } else if ([channelID isEqualToString:@"homepage_mediumvideo"]) {
+            isHideChannel = [defaults boolForKey:@"DYYYHideMediumVideo"];
+        } else if ([channelID isEqualToString:@"homepage_mall"]) {
+            isHideChannel = [defaults boolForKey:@"DYYYHideMall"];
+        } else if ([channelID isEqualToString:@"homepage_nearby"]) {
+            isHideChannel = [defaults boolForKey:@"DYYYHideNearby"];
+        } else if ([channelID isEqualToString:@"homepage_groupon"]) {
+            isHideChannel = [defaults boolForKey:@"DYYYHideGroupon"];
+        } else if ([channelID isEqualToString:@"homepage_tablive"]) {
+            isHideChannel = [defaults boolForKey:@"DYYYHideTabLive"];
+        } else if ([channelID isEqualToString:@"homepage_pad_hot"]) {
+            isHideChannel = [defaults boolForKey:@"DYYYHidePadHot"];
+        } else if ([channelID isEqualToString:@"homepage_hangout"]) {
+            isHideChannel = [defaults boolForKey:@"DYYYHideHangout"];
+        } else if ([channelID isEqualToString:@"homepage_familiar"]) {
+            isHideChannel = [defaults boolForKey:@"DYYYHideFriend"];
+        }
+        
+        if (!isHideChannel) {
+            [newChannelModels addObject:tabItemModel];
+        } else {
+            [newCurrentChannelIDList removeObject:channelID];
+        }
     }
-    %orig;
+    
+    %orig(newChannelModels, newCurrentChannelIDList, arg3, arg4);
 }
 
 %end
@@ -1454,7 +1296,7 @@ void downloadAllImages(NSMutableArray *imageURLs) {
     }
     NSString *labelColor = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYLabelColor"];
     if (labelColor.length > 0) {
-        label.textColor = colorWithHexString(labelColor);
+        label.textColor = [DYYYManager colorWithHexString:labelColor];
     }
 
     return label;
@@ -1485,45 +1327,6 @@ void downloadAllImages(NSMutableArray *imageURLs) {
         %orig(alpha);
    }else {
        %orig;
-    }
-}
-
-%end
-
-%hook AWEUserWorkCollectionViewComponentCell
-
-- (void)layoutSubviews {
-    %orig;
-
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideMyPage"]) {
-        [self removeFromSuperview];
-        return;
-    }
-}
-
-%end
-
-%hook AWEFeedRefreshFooter
-
-- (void)layoutSubviews {
-    %orig;
-
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideMyPage"]) {
-        [self removeFromSuperview];
-        return;
-    }
-}
-
-%end
-
-%hook AWERLSegmentView
-
-- (void)layoutSubviews {
-    %orig;
-
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHideMyPage"]) {
-        [self removeFromSuperview];
-        return;
     }
 }
 
@@ -1615,9 +1418,9 @@ void downloadAllImages(NSMutableArray *imageURLs) {
                 
                 if (videoModel && videoModel.h264URL && videoModel.h264URL.originURLList.count > 0) {
                     NSURL *url = [NSURL URLWithString:videoModel.h264URL.originURLList.firstObject];
-                    downloadMedia(url, MediaTypeVideo, ^{
-                        showToast(@"视频已保存到相册");
-                    });
+                    [DYYYManager downloadMedia:url mediaType:MediaTypeVideo completion:^{
+                        [DYYYManager showToast:@"视频已保存到相册"];
+                    }];
                 }
                 
                 AWELongPressPanelManager *panelManager = [%c(AWELongPressPanelManager) shareInstance];
@@ -1640,9 +1443,9 @@ void downloadAllImages(NSMutableArray *imageURLs) {
                 
                 if (videoModel && videoModel.coverURL && videoModel.coverURL.originURLList.count > 0) {
                     NSURL *url = [NSURL URLWithString:videoModel.coverURL.originURLList.firstObject];
-                    downloadMedia(url, MediaTypeImage, ^{
-                        showToast(@"封面已保存到相册");
-                    });
+                    [DYYYManager downloadMedia:url mediaType:MediaTypeImage completion:^{
+                        [DYYYManager showToast:@"封面已保存到相册"];
+                    }];
                 }
                 
                 AWELongPressPanelManager *panelManager = [%c(AWELongPressPanelManager) shareInstance];
@@ -1664,7 +1467,7 @@ void downloadAllImages(NSMutableArray *imageURLs) {
             
             if (musicModel && musicModel.playURL && musicModel.playURL.originURLList.count > 0) {
                 NSURL *url = [NSURL URLWithString:musicModel.playURL.originURLList.firstObject];
-                downloadMedia(url, MediaTypeAudio, nil);
+                [DYYYManager downloadMedia:url mediaType:MediaTypeAudio completion:nil];
             }
             
             AWELongPressPanelManager *panelManager = [%c(AWELongPressPanelManager) shareInstance];
@@ -1692,9 +1495,9 @@ void downloadAllImages(NSMutableArray *imageURLs) {
                 
                 if (currentImageModel && currentImageModel.urlList.count > 0) {
                     NSURL *url = [NSURL URLWithString:currentImageModel.urlList.firstObject];
-                    downloadMedia(url, MediaTypeImage, ^{
-                        showToast(@"图片已保存到相册");
-                    });
+                    [DYYYManager downloadMedia:url mediaType:MediaTypeImage completion:^{
+                        [DYYYManager showToast:@"图片已保存到相册"];
+                    }];
                 }
                 
                 AWELongPressPanelManager *panelManager = [%c(AWELongPressPanelManager) shareInstance];
@@ -1721,7 +1524,7 @@ void downloadAllImages(NSMutableArray *imageURLs) {
                     }
                     
                     if (imageURLs.count > 0) {
-                        downloadAllImages(imageURLs);
+                        [DYYYManager downloadAllImages:imageURLs];
                     }
                     
                     AWELongPressPanelManager *panelManager = [%c(AWELongPressPanelManager) shareInstance];
@@ -1743,7 +1546,7 @@ void downloadAllImages(NSMutableArray *imageURLs) {
         copyText.action = ^{
             NSString *descText = [self.awemeModel valueForKey:@"descriptionString"];
             [[UIPasteboard generalPasteboard] setString:descText];
-            showToast(@"文案已复制到剪贴板");
+            [DYYYManager showToast:@"文案已复制到剪贴板"];
             
             AWELongPressPanelManager *panelManager = [%c(AWELongPressPanelManager) shareInstance];
             [panelManager dismissWithAnimation:YES completion:nil];
@@ -1793,9 +1596,9 @@ void downloadAllImages(NSMutableArray *imageURLs) {
                 
                 if (videoModel && videoModel.h264URL && videoModel.h264URL.originURLList.count > 0) {
                     NSURL *url = [NSURL URLWithString:videoModel.h264URL.originURLList.firstObject];
-                    downloadMedia(url, MediaTypeVideo, ^{
-                        showToast(@"视频已保存到相册");
-                    });
+                    [DYYYManager downloadMedia:url mediaType:MediaTypeVideo completion:^{
+                        [DYYYManager showToast:@"视频已保存到相册"];
+                    }];
                 }
                 
                 AWELongPressPanelManager *panelManager = [%c(AWELongPressPanelManager) shareInstance];
@@ -1818,9 +1621,9 @@ void downloadAllImages(NSMutableArray *imageURLs) {
                 
                 if (videoModel && videoModel.coverURL && videoModel.coverURL.originURLList.count > 0) {
                     NSURL *url = [NSURL URLWithString:videoModel.coverURL.originURLList.firstObject];
-                    downloadMedia(url, MediaTypeImage, ^{
-                        showToast(@"封面已保存到相册");
-                    });
+                    [DYYYManager downloadMedia:url mediaType:MediaTypeImage completion:^{
+                        [DYYYManager showToast:@"封面已保存到相册"];
+                    }];
                 }
                 
                 AWELongPressPanelManager *panelManager = [%c(AWELongPressPanelManager) shareInstance];
@@ -1842,7 +1645,7 @@ void downloadAllImages(NSMutableArray *imageURLs) {
             
             if (musicModel && musicModel.playURL && musicModel.playURL.originURLList.count > 0) {
                 NSURL *url = [NSURL URLWithString:musicModel.playURL.originURLList.firstObject];
-                downloadMedia(url, MediaTypeAudio, nil);
+                [DYYYManager downloadMedia:url mediaType:MediaTypeAudio completion:nil];
             }
             
             AWELongPressPanelManager *panelManager = [%c(AWELongPressPanelManager) shareInstance];
@@ -1870,9 +1673,9 @@ void downloadAllImages(NSMutableArray *imageURLs) {
                 
                 if (currentImageModel && currentImageModel.urlList.count > 0) {
                     NSURL *url = [NSURL URLWithString:currentImageModel.urlList.firstObject];
-                    downloadMedia(url, MediaTypeImage, ^{
-                        showToast(@"图片已保存到相册");
-                    });
+                    [DYYYManager downloadMedia:url mediaType:MediaTypeImage completion:^{
+                        [DYYYManager showToast:@"图片已保存到相册"];
+                    }];
                 }
                 
                 AWELongPressPanelManager *panelManager = [%c(AWELongPressPanelManager) shareInstance];
@@ -1899,7 +1702,7 @@ void downloadAllImages(NSMutableArray *imageURLs) {
                     }
                     
                     if (imageURLs.count > 0) {
-                        downloadAllImages(imageURLs);
+                        [DYYYManager downloadAllImages:imageURLs];
                     }
                     
                     AWELongPressPanelManager *panelManager = [%c(AWELongPressPanelManager) shareInstance];
@@ -1921,7 +1724,7 @@ void downloadAllImages(NSMutableArray *imageURLs) {
         copyText.action = ^{
             NSString *descText = [self.awemeModel valueForKey:@"descriptionString"];
             [[UIPasteboard generalPasteboard] setString:descText];
-            showToast(@"文案已复制到剪贴板");
+            [DYYYManager showToast:@"文案已复制到剪贴板"];
             
             AWELongPressPanelManager *panelManager = [%c(AWELongPressPanelManager) shareInstance];
             [panelManager dismissWithAnimation:YES completion:nil];
@@ -2029,10 +1832,14 @@ static CGFloat currentScale = 1.0;
         @"icon_home_favorite": @"favorite.png",
         @"iconHomeShareRight": @"share.png"
     };
-    
+
     NSString *customFileName = nil;
+    if ([nameString containsString:@"_comment"]) {
+        customFileName = @"comment.png";
+    }
+
     for (NSString *prefix in iconMapping.allKeys) {
-        if (([nameString hasPrefix:prefix]) || ([nameString containsString:@"_comment"])) {
+        if ([nameString hasPrefix:prefix]) {
             customFileName = iconMapping[prefix];
             break;
         }
@@ -2145,9 +1952,9 @@ static BOOL isDownloadFlied = NO;
                 }
 
                 NSURL *heifURL = [NSURL URLWithString:urlString];
-                downloadMedia(heifURL, MediaTypeHeic, ^{
-                    showToast(@"表情包已保存到相册");
-                    });
+                [DYYYManager downloadMedia:heifURL mediaType:MediaTypeHeic completion:^{
+                    [DYYYManager showToast:@"表情包已保存到相册"];
+                }];
                 return;
             }
         }
@@ -2156,11 +1963,59 @@ static BOOL isDownloadFlied = NO;
 }
 %end
 
+%hook _TtC33AWECommentLongPressPanelSwiftImpl32CommentLongPressPanelCopyElement
+
+-(void)elementTapped{
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYCommentCopyText"]) {
+        AWECommentLongPressPanelContext *commentPageContext = [self commentPageContext];
+        AWECommentModel *selectdComment = [commentPageContext selectdComment];
+        if(!selectdComment){
+            AWECommentLongPressPanelParam *params = [commentPageContext params];
+            selectdComment = [params selectdComment];
+        }
+        NSString *descText = [selectdComment content];
+        [[UIPasteboard generalPasteboard] setString:descText];
+        [DYYYManager showToast:@"文案已复制到剪贴板"];
+    }
+}
+%end
+
+%hook AWEConcernSkylightCapsuleView
+- (void)setHidden:(BOOL)hidden {
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHidenCapsuleView"]) {
+        hidden = YES;
+    }
+
+    %orig(hidden);
+}
+%end
+
+// 去广告功能
+%hook AwemeAdManager
+- (void)showAd {
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYNoAds"]) return;
+    %orig;
+}
+%end
+
+//隐藏顶栏关注下的提示线
+%hook AWEFeedMultiTabSelectedContainerView
+
+- (void)setHidden:(BOOL)hidden {
+    BOOL forceHide = [[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYHidentopbarprompt"];
+    
+    if (forceHide) {
+        %orig(YES); 
+    } else {
+        %orig(hidden); 
+    }
+}
+
+%end
+
 %ctor {
     %init(DYYYSettingsGesture);
     if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYUserAgreementAccepted"]) {
         %init;
     }
 }
-
-
